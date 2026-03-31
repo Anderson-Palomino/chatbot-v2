@@ -1,0 +1,139 @@
+name: chatbot-v2
+
+services:
+
+  # ── App ──────────────────────────────────────────────────────────────────────
+
+  bot:
+    build: ./bot
+    container_name: chatbot-bot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chatbot-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - chatbot-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Routers ──────────────────────────────────────────────────────────────────
+
+  r1:
+    build: ./router
+    container_name: chatbot-r1
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+    entrypoint: ["/entrypoints/r1-entrypoint.sh"]
+    networks:
+      - lan1
+      - wan
+    restart: unless-stopped
+
+  r2:
+    build: ./router
+    container_name: chatbot-r2
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+    entrypoint: ["/entrypoints/r2-entrypoint.sh"]
+    networks:
+      - wan
+      - lan2
+    restart: unless-stopped
+
+  # ── Simuladores de VM ────────────────────────────────────────────────────────
+
+  vm1-sim:
+    image: alpine:latest
+    container_name: chatbot-vm1
+    command: ["sh", "-c", "sleep infinity"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - lan1
+    restart: unless-stopped
+
+  vm2-sim:
+    image: alpine:latest
+    container_name: chatbot-vm2
+    command: ["sh", "-c", "sleep infinity"]
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - lan2
+    restart: unless-stopped
+
+  # ── Test runner ──────────────────────────────────────────────────────────────
+
+  test-runner:
+    build: ./bot
+    container_name: chatbot-test-runner
+    command: ["sleep", "infinity"]
+    env_file: .env
+    volumes:
+      - ./tests:/tests:ro
+    networks:
+      - chatbot-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - bot
+      - postgres
+
+# ── Redes ─────────────────────────────────────────────────────────────────────
+
+networks:
+  chatbot-net:
+    driver: bridge
+
+  lan1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+
+  wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+  lan2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.2.0/24
+
+# ── Volúmenes ─────────────────────────────────────────────────────────────────
+
+volumes:
+  postgres_data:
