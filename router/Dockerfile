@@ -8,7 +8,8 @@ RUN apk add --no-cache \
     iproute2 \
     tcpdump \
     iputils \
-    bash
+    bash \
+    curl
 
 RUN mkdir -p /entrypoints /etc/wireguard
 

@@ -55,8 +55,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(
         "/start — Iniciar\n"
         "/help — Mostrar ayuda\n"
+        "/myid — Ver tu Chat ID (para alertas de firewall)\n"
         "/reset — Borrar historial de conversación\n"
         "Cualquier mensaje — Chatear con Qwen 2.5:7b"
+    )
+
+
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(
+        f"Tu Chat ID es: `{chat_id}`\n\n"
+        f"Ponlo en el `.env` como:\n`ADMIN_CHAT_ID={chat_id}`\n\n"
+        f"Luego reinicia el bot con:\n`docker compose restart bot`",
+        parse_mode="Markdown",
     )
 
 
@@ -120,6 +131,7 @@ def build_application(token: str, db_session_factory) -> Application:
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CommandHandler("reset", reset_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

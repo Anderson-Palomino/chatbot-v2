@@ -52,8 +52,11 @@ services:
       - net.ipv4.ip_forward=1
     entrypoint: ["/entrypoints/r1-entrypoint.sh"]
     networks:
-      - lan1
-      - wan
+      lan1: {}
+      wan:
+        ipv4_address: 172.28.0.10
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   r2:
@@ -66,8 +69,11 @@ services:
       - net.ipv4.ip_forward=1
     entrypoint: ["/entrypoints/r2-entrypoint.sh"]
     networks:
-      - wan
-      - lan2
+      wan:
+        ipv4_address: 172.28.0.20
+      lan2: {}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   # ── Simuladores de VM ────────────────────────────────────────────────────────

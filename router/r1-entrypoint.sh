@@ -1,21 +1,23 @@
 #!/bin/bash
 set -e
 
-# ── R1: iptables (Firewall 1) ─────────────────────────────────────────────────
-# WireGuard: wg0 (10.0.3.1) ↔ R2 (10.0.3.2)
-
 echo "[R1] Habilitando IP forwarding..."
 sysctl -w net.ipv4.ip_forward=1 || echo "[R1] sysctl ya activo (Docker Desktop)"
 
-# Resolver IP de R2 en la red WAN via DNS de Docker
-R2_WAN_IP=$(getent hosts chatbot-r2 | awk '{print $1}' | head -1)
+R2_WAN_IP="172.28.0.20"
 echo "[R1] IP de R2 (WAN): ${R2_WAN_IP}"
 
-# ── WireGuard keys ────────────────────────────────────────────────────────────
+# ── Interfaces ────────────────────────────────────────────────────────────────
+LAN1_IF=$(ip route | grep "172.28.1.0/24" | grep -oP 'dev \K\S+' | head -1)
+WAN_IF=$(ip route  | grep "172.28.0.0/24" | grep -oP 'dev \K\S+' | head -1)
+[ -z "$LAN1_IF" ] && LAN1_IF="eth0"
+[ -z "$WAN_IF"  ] && WAN_IF="eth1"
+echo "[R1] LAN1=${LAN1_IF}  WAN=${WAN_IF}"
+
+# ── WireGuard ─────────────────────────────────────────────────────────────────
 R1_PRIVATE="qHNLFRe8GHnNP2x1VrKWrRFLM8PjAR8QLpGIJbbJaEQ="
 R2_PUBLIC="CaQ5LnF9qKlKp9rBXXv2c5aFl3SLzLjQz7c0UYYgixY="
 
-echo "[R1] Configurando WireGuard wg0..."
 cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
 PrivateKey = ${R1_PRIVATE}
@@ -31,16 +33,7 @@ EOF
 
 wg-quick up wg0 || true
 
-# Detectar interfaces de red
-LAN1_IF=$(ip route | grep 172.28.1 | awk '{print $3}' | head -1)
-WAN_IF=$(ip route | grep 172.28.0 | awk '{print $3}' | head -1)
-[ -z "$LAN1_IF" ] && LAN1_IF="eth0"
-[ -z "$WAN_IF" ] && WAN_IF="eth1"
-echo "[R1] LAN1_IF=${LAN1_IF}  WAN_IF=${WAN_IF}"
-
 # ── iptables (F1) ─────────────────────────────────────────────────────────────
-echo "[R1] Aplicando reglas iptables (F1)..."
-
 iptables -F
 iptables -t nat -F
 iptables -P FORWARD DROP
@@ -51,8 +44,33 @@ iptables -A FORWARD -i "${LAN1_IF}" -o wg0 -j ACCEPT
 iptables -A FORWARD -i wg0 -o "${LAN1_IF}" -j ACCEPT
 iptables -t nat -A POSTROUTING -o "${WAN_IF}" -j MASQUERADE
 iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE
+iptables -A FORWARD -i "${WAN_IF}" -o "${LAN1_IF}" -j DROP
 
-echo "[R1] Configuración completa."
-iptables -L -n -v
+ip route replace 172.28.2.0/24 via "${R2_WAN_IP}" dev "${WAN_IF}" || true
+echo "[R1] iptables (F1) configurado."
 
-exec sleep infinity
+# ── Monitor de contadores iptables ────────────────────────────────────────────
+BOT_URL="http://host.docker.internal:8000/alert"
+PREV=0
+echo "[R1] Monitor de contadores iniciado..."
+
+while true; do
+    CURR=$(iptables -L FORWARD -n -v 2>/dev/null \
+        | awk '/DROP/ && /eth1.*eth0/{print $1; exit}')
+    CURR=${CURR:-0}
+
+    if [ "$CURR" -gt "$PREV" ] 2>/dev/null; then
+        DIFF=$((CURR - PREV))
+        TARGETS=$(ip neigh show dev "${LAN1_IF}" 2>/dev/null \
+            | grep -v FAILED | grep -oP '^\S+' | head -3 | tr '\n' ' ')
+        [ -z "$TARGETS" ] && TARGETS="172.28.1.0/24"
+
+        echo "[R1-BLOCK] ${DIFF} paquetes bloqueados WAN→LAN1 | targets: ${TARGETS}"
+        curl -sf -X POST "$BOT_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"router\":\"R1\",\"firewall\":\"iptables\",\"src\":\"WAN\",\"dst\":\"${TARGETS}\",\"proto\":\"DROP\",\"port\":\"${DIFF} pkts\"}" \
+            >/dev/null 2>&1 &
+        PREV=$CURR
+    fi
+    sleep 2
+done
